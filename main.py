@@ -334,7 +334,7 @@ def import_ebay(req: ImportRequest):
         "glb_price": data["glb_price"],
         "currency": data["currency"],
         "category": data["category"],
-        "images": data["images"],
+        "images": [f"https://images.weserv.nl/?url={img}&output=jpg" for img in data["images"]],
         "translations": {
             "de": {"title": title_de, "description": desc_de},
             "fr": {"title": title_fr, "description": desc_fr},
