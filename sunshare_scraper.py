@@ -23,6 +23,118 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
 ]
 
+def remove_stray_continuation_bytes(data: bytes):
+    """
+    Entfernt isolierte Continuation Bytes (0x80-0xBF) ohne gültigen Start-Byte.
+
+    UTF-8 Sequenzlängen:
+      1-Byte:  0x00-0x7F        (ASCII)
+      2-Byte:  0xC2-0xDF + 0x80-0xBF
+      3-Byte:  0xE0-0xEF + 0x80-0xBF * 2
+      4-Byte:  0xF0-0xF4 + 0x80-0xBF * 3
+      Ungültig: 0x80-0xBF (stray), 0xC0-0xC1 (overlong), 0xF5+ (out of range)
+
+    WICHTIG: 0xAD ist nur ungültig als ISOLIERTES Byte.
+    - í = C3 AD (gültig, 2-Byte-Sequenz) → wird BEIBEHALTEN
+    - Э = D0 AD (gültig, 2-Byte-Sequenz) → wird BEIBEHALTEN
+    - U+00AD = C2 AD (gültig, 2-Byte-Sequenz) → wird BEIBEHALTEN
+    - 0xAD allein (sunshare.de Bug) → wird ENTFERNT
+    """
+    result = bytearray()
+    removed = []
+    i = 0
+    while i < len(data):
+        byte = data[i]
+        if 0x00 <= byte <= 0x7F:
+            # ASCII – immer gültig
+            result.append(byte)
+            i += 1
+        elif 0xC2 <= byte <= 0xDF:
+            # 2-Byte Sequenz: start + 1 continuation
+            if i + 1 < len(data) and 0x80 <= data[i + 1] <= 0xBF:
+                result.extend(data[i:i + 2])
+                i += 2
+            else:
+                removed.append((i, byte))
+                i += 1
+        elif 0xE0 <= byte <= 0xEF:
+            # 3-Byte Sequenz: start + 2 continuations
+            if (i + 2 < len(data)
+                    and 0x80 <= data[i + 1] <= 0xBF
+                    and 0x80 <= data[i + 2] <= 0xBF):
+                result.extend(data[i:i + 3])
+                i += 3
+            else:
+                removed.append((i, byte))
+                i += 1
+        elif 0xF0 <= byte <= 0xF4:
+            # 4-Byte Sequenz: start + 3 continuations
+            if (i + 3 < len(data)
+                    and 0x80 <= data[i + 1] <= 0xBF
+                    and 0x80 <= data[i + 2] <= 0xBF
+                    and 0x80 <= data[i + 3] <= 0xBF):
+                result.extend(data[i:i + 4])
+                i += 4
+            else:
+                removed.append((i, byte))
+                i += 1
+        else:
+            # Stray continuation byte (0x80-0xBF) ODER ungültiger Start (0xC0,0xC1,0xF5+)
+            removed.append((i, byte))
+            i += 1
+    return bytes(result), removed
+
+
+def parse_sunshare_json_safe(raw_bytes: bytes, log=None) -> dict:
+    """
+    Parst Shopify JSON-Response von sunshare.de mit präzisem Encoding-Handling.
+
+    Strategie (4-stufig):
+    1. Strict UTF-8 (Normalfall – kein Overhead)
+    2. Bei UnicodeDecodeError: Position + Kontext loggen, stray bytes präzise entfernen
+    3. Erneut strict UTF-8 auf bereinigten Bytes
+    4. Letzter Fallback: errors='replace' (nie ohne Log)
+
+    Garantiert:
+    - Deutsche Umlaute (ä=C3A4, ö=C3B6, ü=C3BC, ß=C39F) bleiben erhalten
+    - Französische Zeichen (é=C3A9, ç=C3A7, à=C3A0) bleiben erhalten
+    - Arabisch, Chinesisch, Kyrillisch (alle mehrbyte UTF-8) bleiben erhalten
+    - Nur echte Fehlbytes werden entfernt, nie gültige Sequenzen
+    """
+    if log is None:
+        log = logging.getLogger(__name__)
+
+    # ── Schritt 1: Strict UTF-8 (Normalfall, kein Overhead) ──────────
+    try:
+        return json.loads(raw_bytes.decode('utf-8')).get('product', {})
+    except UnicodeDecodeError as e:
+        prev_byte = raw_bytes[e.start - 1] if e.start > 0 else 0
+        log.warning(
+            f"[Sunshare] UnicodeDecodeError: Stray Byte 0x{raw_bytes[e.start]:02x} "
+            f"an Position {e.start} (vorher: 0x{prev_byte:02x}, "
+            f"Reason: {e.reason})"
+        )
+
+    # ── Schritt 2: Stray Continuation Bytes präzise entfernen ────────
+    cleaned, removed = remove_stray_continuation_bytes(raw_bytes)
+    for pos, b in removed:
+        log.warning(f"[Sunshare] Entferntes Byte: 0x{b:02x} an Position {pos}")
+
+    # ── Schritt 3: Strict UTF-8 auf bereinigten Daten ────────────────
+    try:
+        return json.loads(cleaned.decode('utf-8')).get('product', {})
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        log.error(f"[Sunshare] Schritt 3 fehlgeschlagen ({type(e).__name__}): {e}")
+
+    # ── Schritt 4: Letzter Fallback (mit explizitem Logging) ─────────
+    log.warning("[Sunshare] Fallback: errors='replace' aktiv – prüfe die Response-Quelle")
+    text = cleaned.decode('utf-8', errors='replace').replace('�', '')
+    try:
+        return json.loads(text).get('product', {})
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Sunshare JSON-Response konnte nicht verarbeitet werden: {e}")
+
+
 def get_headers():
     return {
         "User-Agent": random.choice(USER_AGENTS),
@@ -128,7 +240,19 @@ async def scrape_sunshare_product(url: str) -> dict:
             json_resp.raise_for_status()
             break
 
-        product_data = json_resp.json().get("product", {})
+        # ── ENCODING-FIX: sunshare.de (Shopify) sendet manchmal 0xAD als einzelnes,
+        # ungültiges Byte in UTF-8-Streams (Latin-1 Soft Hyphen Bug).
+        #
+        # httpx's .json() ruft intern .text → .content.decode('utf-8') auf
+        # → UnicodeDecodeError (Subclass von ValueError) → HTTP 422.
+        #
+        # parse_sunshare_json_safe() löst das präzise:
+        # 1. Strict UTF-8 (Normalfall – kein Overhead)
+        # 2. Bei Fehler: stray continuation bytes KONTEXTBEWUSST entfernen
+        #    (0xAD allein = stray → weg; í=C3AD, Э=D0AD → beibehalten)
+        # 3. Erneut strict UTF-8 auf bereinigten Bytes
+        # 4. Letzter Fallback mit explizitem Logging
+        product_data = parse_sunshare_json_safe(json_resp.content, logger)
 
     # ── Titel ──────────────────────────────────────────────────────
     title = product_data.get("title", "").strip()
