@@ -11,9 +11,10 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sunshare_scraper import import_sunshare_product  # ← NEU
 
 app = FastAPI(title="GermanLink Business – eBay Import API")
 
@@ -131,7 +132,6 @@ def extract_images(soup: BeautifulSoup) -> list:
 def fetch_ebay_page(url: str):
     session = requests.Session()
 
-    # Erst eBay-Startseite besuchen (setzt Cookies)
     try:
         base_domain = re.match(r"(https?://[^/]+)", url).group(1)
         session.get(base_domain, headers=get_headers(), timeout=10)
@@ -146,7 +146,6 @@ def fetch_ebay_page(url: str):
 def parse_ebay(html: str, source_url: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
 
-    # Titel
     title = ""
     for script in soup.find_all("script", {"type": "application/ld+json"}):
         try:
@@ -173,7 +172,6 @@ def parse_ebay(html: str, source_url: str) -> dict:
     if not title:
         raise HTTPException(status_code=422, detail="Titel konnte nicht extrahiert werden.")
 
-    # Beschreibung
     description = ""
     meta = soup.find("meta", {"name": "description"})
     if meta:
@@ -190,7 +188,6 @@ def parse_ebay(html: str, source_url: str) -> dict:
     if not description:
         description = title
 
-    # Preis
     base_price = None
     currency = "EUR"
 
@@ -230,7 +227,6 @@ def parse_ebay(html: str, source_url: str) -> dict:
     if base_price is None:
         raise HTTPException(status_code=422, detail="Preis konnte nicht extrahiert werden.")
 
-    # Kategorie
     category = "Sonstiges"
     breadcrumb = soup.find("nav", {"aria-label": re.compile(r"breadcrumb", re.I)})
     if breadcrumb:
@@ -342,8 +338,29 @@ def import_ebay(req: ImportRequest):
         },
     }
 
+
+# ── Sunshare Import ───────────────────────────────────────────────────────────
+@app.post("/api/import-sunshare")
+async def import_sunshare(request: Request):
+    """Importiert ein Sunshare.de Produkt via Shopify JSON API."""
+    try:
+        body = await request.json()
+        url = body.get("url", "").strip()
+        if not url or "sunshare.de" not in url:
+            raise HTTPException(status_code=400, detail="Ungültige Sunshare URL")
+
+        product = await import_sunshare_product(url)
+        return product
+
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Import fehlgeschlagen: {str(e)}")
+
+
 @app.post("/api/products")
 def save_product(product: SaveRequest):
     print(f"[GLB] Produkt gespeichert: {product.source_url}")
     return {"status": "saved", "source_url": product.source_url}
-
