@@ -49,6 +49,14 @@ def extract_wattage(text: str) -> Optional[str]:
     return f"{match.group(1)}W" if match else None
 
 
+def clean_url(url: str) -> str:
+    """Bereinigt URL von unsichtbaren Sonderzeichen und Encoding-Problemen."""
+    # Soft hyphen (0xAD) und andere unsichtbare Zeichen entfernen
+    url = url.encode('utf-8', errors='ignore').decode('utf-8')
+    url = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\xad]', '', url)
+    return url.strip()
+
+
 def extract_product_slug(url: str) -> Optional[str]:
     """Extrahiert den Produkt-Slug aus einer Sunshare URL."""
     match = re.search(r'/products/([^/?#]+)', url)
@@ -62,6 +70,8 @@ async def scrape_sunshare_product(url: str) -> dict:
     - /products/... (direkte Produkt-URL)
     - /collections/... (erste Produkt-URL aus Kategorie)
     """
+    url = clean_url(url)
+
     async with httpx.AsyncClient(headers=get_headers(), follow_redirects=True, timeout=25.0) as client:
 
         # Wenn Collection-URL: erste Produkt-URL extrahieren
@@ -267,3 +277,4 @@ async def import_sunshare_product(url: str) -> dict:
         "category":       "solar_energie",
         "source_type":    "sunshare",
     }
+
