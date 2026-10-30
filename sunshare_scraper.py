@@ -240,6 +240,51 @@ async def scrape_sunshare_product(url: str) -> dict:
             json_resp.raise_for_status()
             break
 
+        # ── PHASE 1: Leere Response prüfen ──────────────────────────────
+        if not json_resp.content:
+            raise ValueError(
+                f"Sunshare: Leere Antwort erhalten (Status {json_resp.status_code}). "
+                f"Produkt existiert möglicherweise nicht mehr oder die URL ist ungültig: {json_url}"
+            )
+
+        # ── PHASE 2: Content-Type + erste Bytes prüfen ───────────────
+        # Nur JSON-Antworten an den JSON-Parser übergeben.
+        # HTML-Antworten (Bot-Schutz, 404-Seite, Redirect-Ziel) gesondert behandeln.
+        content_type = json_resp.headers.get("content-type", "").lower()
+        first_bytes = json_resp.content[:20].lstrip()
+        is_html = ("html" in content_type) or first_bytes.startswith(b"<")
+
+        if is_html:
+            # HTML-Response: Titel extrahieren für sprechende Fehlermeldung
+            try:
+                soup = BeautifulSoup(json_resp.content[:5000], "html.parser")
+                page_title_tag = soup.find("title")
+                page_title = page_title_tag.text.strip() if page_title_tag else "unbekannt"
+            except Exception:
+                page_title = "unbekannt"
+
+            logger.warning(
+                f"[Sunshare] HTML statt JSON erhalten: Status={json_resp.status_code}, "
+                f"Content-Type='{content_type}', Seite='{page_title}', URL={json_url}"
+            )
+
+            if json_resp.status_code == 404:
+                raise ValueError(
+                    f"Sunshare: Produkt nicht gefunden (404). "
+                    f"Bitte prüfe ob das Produkt noch existiert: {json_url}"
+                )
+            elif json_resp.status_code == 403:
+                raise ValueError(
+                    f"Sunshare: Zugriff verweigert (403). "
+                    f"Bot-Schutz aktiv oder IP gesperrt. Bitte später erneut versuchen."
+                )
+            else:
+                raise ValueError(
+                    f"Sunshare: HTML statt JSON erhalten (Status {json_resp.status_code}, "
+                    f"Seite: '{page_title}'). "
+                    f"Möglicherweise Bot-Schutz aktiv oder Produkt nicht verfügbar."
+                )
+
         # ── ENCODING-FIX: sunshare.de (Shopify) sendet manchmal 0xAD als einzelnes,
         # ungültiges Byte in UTF-8-Streams (Latin-1 Soft Hyphen Bug).
         #
