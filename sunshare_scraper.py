@@ -267,4 +267,3 @@ async def import_sunshare_product(url: str) -> dict:
         "category":       "solar_energie",
         "source_type":    "sunshare",
     }
-

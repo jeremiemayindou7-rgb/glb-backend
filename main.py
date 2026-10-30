@@ -364,3 +364,4 @@ async def import_sunshare(request: Request):
 def save_product(product: SaveRequest):
     print(f"[GLB] Produkt gespeichert: {product.source_url}")
     return {"status": "saved", "source_url": product.source_url}
+
