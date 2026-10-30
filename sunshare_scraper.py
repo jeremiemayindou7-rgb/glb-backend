@@ -60,7 +60,13 @@ def clean_url(url: str) -> str:
 def extract_product_slug(url: str) -> Optional[str]:
     """Extrahiert den Produkt-Slug aus einer Sunshare URL."""
     match = re.search(r'/products/([^/?#]+)', url)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    slug = match.group(1)
+    # Soft Hyphen (0xAD) und andere unsichtbare Bytes aus dem Slug entfernen
+    slug = slug.encode('utf-8', errors='ignore').decode('utf-8')
+    slug = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\xad­]', '', slug)
+    return slug.strip()
 
 
 async def scrape_sunshare_product(url: str) -> dict:

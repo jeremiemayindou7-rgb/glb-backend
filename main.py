@@ -345,10 +345,12 @@ async def import_sunshare(request: Request):
     """Importiert ein Sunshare.de Produkt via Shopify JSON API."""
     try:
         raw = await request.body()
-        body = json.loads(raw.decode("utf-8", errors="replace"))
+        # Soft Hyphen (0xAD) direkt als Byte aus dem Body entfernen BEVOR json.loads
+        raw_clean = raw.replace(b'\xad', b'')
+        body = json.loads(raw_clean.decode("utf-8", errors="replace"))
         url = body.get("url", "").strip()
-        # Unsichtbare Sonderzeichen (z.B. Soft Hyphen 0xAD) entfernen
-        url = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\xad]', '', url)
+        # Zusätzlich Unicode Soft Hyphen und andere unsichtbare Zeichen entfernen
+        url = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\xad­]', '', url)
         if not url or "sunshare.de" not in url:
             raise HTTPException(status_code=400, detail="Ungültige Sunshare URL")
 
