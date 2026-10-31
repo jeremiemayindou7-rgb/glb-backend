@@ -240,6 +240,15 @@ async def scrape_sunshare_product(url: str) -> dict:
             json_resp.raise_for_status()
             break
 
+        # ── Diagnose-Logging (immer aktiv) ──────────────────────────────
+        logger.warning(
+            f"[Sunshare] Response: status={json_resp.status_code}, "
+            f"content-type='{json_resp.headers.get('content-type', '')}', "
+            f"content-encoding='{json_resp.headers.get('content-encoding', '')}', "
+            f"content-length={len(json_resp.content)}, "
+            f"first_bytes={json_resp.content[:30].hex()!r}"
+        )
+
         # ── PHASE 1: Leere Response prüfen ──────────────────────────────
         if not json_resp.content:
             raise ValueError(
