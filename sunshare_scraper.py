@@ -140,7 +140,9 @@ def get_headers():
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        # Accept-Encoding wird NICHT gesetzt – httpx übernimmt automatische
+        # Dekomprimierung (gzip/deflate/br). Wenn wir es manuell setzen,
+        # bekommt json_resp.content die rohen komprimierten Bytes.
         "Referer": "https://www.google.de/",
         "DNT": "1",
     }
